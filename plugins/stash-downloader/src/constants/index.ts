@@ -14,7 +14,7 @@ export const ROUTES = {
 } as const;
 
 export const DEFAULT_SETTINGS = {
-  serverDownloadPath: '/data/StashDownloader',
+  serverDownloadPath: '',
   autoCreatePerformers: true,
   autoCreateTags: true,
   autoCreateStudios: false,
