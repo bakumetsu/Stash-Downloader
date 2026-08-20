@@ -110,6 +110,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
       <div className="modal-backdrop fade show" onClick={onClose} />
       <div
         className="modal fade show d-block"
+        style={{ pointerEvents: 'none' }}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
@@ -125,6 +126,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               maxWidth: '95vw',
               maxHeight: '90vh',
               overflow: 'hidden',
+              pointerEvents: 'all',
             }}
             onClick={(e) => e.stopPropagation()}
           >
