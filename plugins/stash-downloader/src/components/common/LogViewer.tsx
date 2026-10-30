@@ -10,6 +10,51 @@ interface LogViewerProps {
   showFilters?: boolean;
 }
 
+type CopyStatus = 'idle' | 'copied' | 'failed';
+
+/**
+ * Copy text to the clipboard. navigator.clipboard only exists in secure contexts
+ * (HTTPS/localhost), and Stash is often served over plain HTTP on a LAN IP,
+ * so fall back to a hidden textarea + execCommand('copy').
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the legacy method
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+/** Plain-text log line, e.g. "2026-10-30 20:35:55.123 [ERROR] [scrape] message" + indented details */
+function formatLogForCopy(log: ILogEntry): string {
+  const ts = log.timestamp;
+  const pad = (n: number, width = 2) => String(n).padStart(width, '0');
+  const time =
+    `${ts.getFullYear()}-${pad(ts.getMonth() + 1)}-${pad(ts.getDate())} ` +
+    `${pad(ts.getHours())}:${pad(ts.getMinutes())}:${pad(ts.getSeconds())}.${pad(ts.getMilliseconds(), 3)}`;
+  const line = `${time} [${log.level.toUpperCase()}] [${log.category}] ${log.message}`;
+  if (!log.details) return line;
+  return `${line}\n${log.details.replace(/^/gm, '    ')}`;
+}
+
 export const LogViewer: React.FC<LogViewerProps> = ({
   maxHeight = '400px',
   showFilters = true,
@@ -19,6 +64,14 @@ export const LogViewer: React.FC<LogViewerProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedLog, setSelectedLog] = useState<ILogEntry | null>(null);
+  const [copyStatus, setCopyStatus] = useState<CopyStatus>('idle');
+
+  // Reset the Copy button label shortly after a copy attempt
+  useEffect(() => {
+    if (copyStatus === 'idle') return;
+    const timer = setTimeout(() => setCopyStatus('idle'), 2000);
+    return () => clearTimeout(timer);
+  }, [copyStatus]);
 
   useEffect(() => {
     if (selectedLog) {
@@ -41,6 +94,12 @@ export const LogViewer: React.FC<LogViewerProps> = ({
       return levelMatch && categoryMatch;
     });
   }, [logs, selectedLevel, selectedCategory]);
+
+  // Copies what's currently shown (respects level/category filters)
+  const handleCopyLogs = async () => {
+    const text = filteredLogs.map(formatLogForCopy).join('\n');
+    setCopyStatus((await copyToClipboard(text)) ? 'copied' : 'failed');
+  };
 
   const getLevelBadgeClass = (level: LogLevel): string => {
     switch (level) {
@@ -94,6 +153,17 @@ export const LogViewer: React.FC<LogViewerProps> = ({
             >
               {isExpanded ? '▲' : '▼'} {isExpanded ? 'Collapse' : 'Expand'}
             </button>
+            {logs.length > 0 && (
+              <button
+                type="button"
+                className={`btn btn-sm ${copyStatus === 'failed' ? 'btn-outline-danger' : 'btn-outline-light'}`}
+                onClick={handleCopyLogs}
+                disabled={filteredLogs.length === 0}
+                title="Copy the logs shown (respects filters) as plain text"
+              >
+                {copyStatus === 'copied' ? '✓ Copied' : copyStatus === 'failed' ? '✗ Copy failed' : '📋 Copy'}
+              </button>
+            )}
             {logs.length > 0 && (
               <button
                 type="button"
