@@ -2,11 +2,10 @@
  * YtDlpScraper - Server-side yt-dlp video extraction via Python backend
  *
  * Flow:
- * 1. Generate unique result_id
- * 2. Call runPluginTask for extract_metadata (saves to temp file)
- * 3. Poll for job completion
- * 4. Call runPluginOperation for read_result (reads temp file)
- * 5. Cleanup temp file
+ * 1. Call runPluginOperation for extract_metadata (runs inline, result returned directly).
+ *    Stash runs jobs one at a time, so a task would wait behind any running download.
+ * 2. If the request itself fails (e.g. a reverse proxy cuts a long request), fall back to
+ *    the task path: runPluginTask saves to a temp file, read_result reads it, cleanup.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- yt-dlp JSON output has dynamic structure */
@@ -14,10 +13,14 @@
 import type { IMetadataScraper, IScrapedMetadata } from '@/types';
 import { ContentType } from '@/types';
 import { getStashService } from '@/services/stash/StashGraphQLService';
-import { createLogger } from '@/utils';
+import { createConcurrencyLimiter, createLogger } from '@/utils';
 import { PLUGIN_ID, STORAGE_KEYS } from '@/constants';
 
 const log = createLogger('YtDlpScraper');
+
+// Operations aren't serialized by Stash, so cap concurrent yt-dlp processes
+// (batch-adding many URLs would otherwise spawn one per URL)
+const extractionLimit = createConcurrencyLimiter(3);
 
 export class YtDlpScraper implements IMetadataScraper {
   name = 'yt-dlp';
@@ -48,48 +51,84 @@ export class YtDlpScraper implements IMetadataScraper {
   }
 
   /**
-   * Server-side extraction using Python backend
+   * Read proxy and custom yt-dlp path from saved settings
+   */
+  private getSettings(): { proxy?: string; ytdlpPath?: string } {
+    if (typeof window === 'undefined') return {};
+    const settings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    if (!settings) return {};
+    try {
+      const parsed = JSON.parse(settings);
+      return { proxy: parsed.httpProxy, ytdlpPath: parsed.ytdlpPath };
+    } catch {
+      // Ignore parse errors
+      return {};
+    }
+  }
+
+  /**
+   * Server-side extraction using Python backend via runPluginOperation
+   */
+  private async scrapeServerSide(url: string): Promise<IScrapedMetadata> {
+    const stashService = getStashService();
+    const { proxy, ytdlpPath } = this.getSettings();
+
+    // Log configuration for troubleshooting
+    if (proxy) {
+      log.debug(`Using HTTP proxy for metadata extraction: ${proxy}`);
+    } else {
+      log.debug('No HTTP proxy configured - using direct connection');
+    }
+    if (ytdlpPath) {
+      log.debug(`Using custom yt-dlp path: ${ytdlpPath}`);
+    }
+
+    // No result_id: Python returns the result directly and writes no temp file.
+    // No request timeout: Python bounds extraction itself (yt-dlp/page fetch timeouts).
+    const op = await extractionLimit(() =>
+      stashService.runPluginOperationWithError(PLUGIN_ID, {
+        mode: 'extract_metadata',
+        url: url,
+        proxy: proxy, // Pass proxy if configured
+        ytdlp_path: ytdlpPath, // Pass custom yt-dlp path if configured
+      })
+    );
+
+    let readResult: any;
+    if (op.error) {
+      // Python result_error (e.g. yt-dlp's message), surfaced as the GraphQL error
+      log.error(`yt-dlp extraction failed: ${op.error}`);
+      throw new Error(op.error);
+    } else if (op.transportError) {
+      log.warn('Extraction request failed, falling back to plugin task');
+      readResult = await this.extractViaTask(url, proxy, ytdlpPath);
+    } else {
+      if (!op.data) {
+        throw new Error('runPluginOperation returned null - check Stash server logs');
+      }
+      readResult = op.data;
+    }
+
+    return this.parseResult(url, readResult);
+  }
+
+  /**
+   * Fallback extraction as a Stash job (queued behind other jobs).
    * Uses file-based result passing:
    * 1. runPluginTask extracts metadata and saves to temp file
    * 2. runPluginOperation reads the result from temp file
    */
-  private async scrapeServerSide(url: string): Promise<IScrapedMetadata> {
+  private async extractViaTask(url: string, proxy?: string, ytdlpPath?: string): Promise<any> {
     const stashService = getStashService();
     const resultId = this.generateResultId();
 
-    log.debug('Starting server-side extraction with result_id:', resultId);
+    log.debug('Starting task-based extraction with result_id:', resultId);
 
     let taskResult: { success: boolean; error?: string; jobId?: string };
 
     // Step 1: Run extract_metadata task (saves result to temp file)
     try {
       log.debug('Calling runPluginTaskAndWait...');
-
-      // Get proxy and ytdlpPath settings from localStorage if available
-      let proxy: string | undefined;
-      let ytdlpPath: string | undefined;
-      if (typeof window !== 'undefined') {
-        const settings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-        if (settings) {
-          try {
-            const parsed = JSON.parse(settings);
-            proxy = parsed.httpProxy;
-            ytdlpPath = parsed.ytdlpPath;
-          } catch {
-            // Ignore parse errors
-          }
-        }
-      }
-
-      // Log configuration for troubleshooting
-      if (proxy) {
-        log.debug(`Using HTTP proxy for metadata extraction: ${proxy}`);
-      } else {
-        log.debug('No HTTP proxy configured - using direct connection');
-      }
-      if (ytdlpPath) {
-        log.debug(`Using custom yt-dlp path: ${ytdlpPath}`);
-      }
 
       // Check if Stash is busy with long-running tasks (Scan, Generate) that could block us
       // Note: Our own plugin jobs queueing is expected and not a concern
@@ -167,6 +206,13 @@ export class YtDlpScraper implements IMetadataScraper {
       log.warn('Cleanup error (ignored):', String(cleanupErr));
     });
 
+    return readResult;
+  }
+
+  /**
+   * Convert the extract_metadata result to our metadata format
+   */
+  private parseResult(url: string, readResult: any): IScrapedMetadata {
     log.debug('Parsing result data...');
 
     // Check for error in result FIRST (this contains the actual error message)

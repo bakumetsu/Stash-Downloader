@@ -184,23 +184,6 @@ export const QueuePage: React.FC = () => {
       return;
     }
 
-    // Check for existing scene in Stash database
-    let existingSceneInfo: { id: string; title?: string } | undefined;
-    if (isStashEnvironment) {
-      try {
-        const existingScene = await stashService.findSceneByURL(url);
-        if (existingScene) {
-          existingSceneInfo = { id: existingScene.id, title: existingScene.title };
-          log.addLog('warning', 'scrape', `Scene already exists in Stash: "${existingScene.title || existingScene.id}"`);
-          toast.showToast('warning', 'Scene Exists', `This scene already exists in Stash: "${existingScene.title || 'ID: ' + existingScene.id}". Adding anyway.`);
-          // Continue adding - user can choose to skip manually
-        }
-      } catch (error) {
-        // Log but don't block if duplicate check fails
-        debugLog.warn('Failed to check for existing scene:', String(error));
-      }
-    }
-
     // Add to queue
     const itemId = queue.addToQueue(url);
     if (!itemId) {
@@ -209,12 +192,22 @@ export const QueuePage: React.FC = () => {
       return;
     }
 
-    // If scene exists in Stash, mark the item
-    if (existingSceneInfo) {
-      queue.updateItem(itemId, { existsInStash: existingSceneInfo });
-    }
-
     log.addLog('info', 'scrape', `Added URL to queue: ${url}`);
+
+    // Check for an existing scene in Stash concurrently (don't delay adding/scraping the item)
+    if (isStashEnvironment) {
+      stashService.findSceneByURL(url).then((existingScene) => {
+        if (existingScene) {
+          queue.updateItem(itemId, { existsInStash: { id: existingScene.id, title: existingScene.title } });
+          log.addLog('warning', 'scrape', `Scene already exists in Stash: "${existingScene.title || existingScene.id}"`);
+          toast.showToast('warning', 'Scene Exists', `This scene already exists in Stash: "${existingScene.title || 'ID: ' + existingScene.id}". Added anyway.`);
+          // Item stays in the queue - user can choose to skip manually
+        }
+      }).catch((error) => {
+        // Log but don't block if duplicate check fails
+        debugLog.warn('Failed to check for existing scene:', String(error));
+      });
+    }
     
     // Scrape metadata in background and update the item
     (async () => {

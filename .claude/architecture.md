@@ -463,6 +463,8 @@ If a scraper throws an error, the registry tries the next one.
 | `404 page not found` (plain text) on page reload | Route under `/plugin/...` - Stash server owns `/plugin/{id}/*` for assets | Register routes outside `/plugin/` (e.g. `/downloader`) |
 | Python exec fails | `interface: js` breaks subprocess | Use `interface: raw` (still works with `ui.javascript`) |
 | `runPluginOperation` returns null | Python script output doesn't match PluginOutput format | Output must be `{error?: string, output?: {...data...}}` - Stash extracts `output` field and returns it directly |
+| Download cancelled mid-way | Wall-clock cap on `runPluginTaskAndWait` | Downloads use stall mode (`stallTimeoutMs` 5 min without progress, 6 h ceiling on RUNNING time) |
+| Metadata slow while a download runs | Stash runs jobs one at a time | Extract via `runPluginOperation` (inline, not queued); task path is only a transport-error fallback |
 | `exit status 1` from Python | Python syntax error or crash | Run `python -m py_compile scripts/download.py` to check syntax |
 | Plugin settings query fails | Wrong GraphQL query structure | Use `configuration { plugins }` - PluginConfigMap is a scalar, not an object type |
 

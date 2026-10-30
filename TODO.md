@@ -31,6 +31,8 @@
 - [ ] Add integration tests for download flow
 
 ## Completed
+- [x] Large downloads no longer cancelled at 10 min: stall detection (5 min without progress, READY time excluded) + Range-resume of dropped direct downloads
+- [x] Faster metadata for new URLs: extraction via `runPluginOperation` (not queued behind downloads), max 3 concurrent; rule34video parser runs before yt-dlp
 - [x] rule34video.com: built-in page parser fallback when yt-dlp's extractor fails ("No video formats found"); re-fetches fresh tokenized URLs on download
 - [x] Copy button in Activity Log toolbar (copies filtered logs as plain text, works over plain HTTP)
 - [x] Fix 404 on page reload: routes moved from `/plugin/{id}` (owned by Stash server) to `/downloader` and `/browser`; old paths redirect in-app
