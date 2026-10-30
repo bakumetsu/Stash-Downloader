@@ -100,7 +100,7 @@ async function getSettings() {
 function getPluginIdentifiers(targetVersion) {
   const isDev = targetVersion === 'dev';
   return {
-    route: isDev ? '/plugin/stash-downloader-dev' : '/plugin/stash-downloader',
+    route: isDev ? '/downloader-dev' : '/downloader',
     storageKey: isDev ? 'stash-downloader-dev-external-queue' : 'stash-downloader-external-queue',
     eventName: isDev ? 'stash-downloader-dev-add-url' : 'stash-downloader-add-url',
   };

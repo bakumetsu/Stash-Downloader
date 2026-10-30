@@ -460,6 +460,7 @@ If a scraper throws an error, the registry tries the next one.
 | useThemeMode error | Using context outside provider | Don't use custom contexts in plugin |
 | Cannot read 'NavLink' | PluginApi not ready | Check `PluginApi.libraries.ReactRouterDOM` |
 | CORS errors (scraping) | Browser security restrictions | Use `YtDlpScraper` (server-side) |
+| `404 page not found` (plain text) on page reload | Route under `/plugin/...` - Stash server owns `/plugin/{id}/*` for assets | Register routes outside `/plugin/` (e.g. `/downloader`) |
 | Python exec fails | `interface: js` breaks subprocess | Use `interface: raw` (still works with `ui.javascript`) |
 | `runPluginOperation` returns null | Python script output doesn't match PluginOutput format | Output must be `{error?: string, output?: {...data...}}` - Stash extracts `output` field and returns it directly |
 | `exit status 1` from Python | Python syntax error or crash | Run `python -m py_compile scripts/download.py` to check syntax |
@@ -775,7 +776,7 @@ function addNavButtonViaMutationObserver() {
     // Use history API for React Router navigation
     navButton.addEventListener('click', (e) => {
       e.preventDefault();
-      window.history.pushState({}, '', '/plugin/stash-downloader');
+      window.history.pushState({}, '', '/downloader');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
 

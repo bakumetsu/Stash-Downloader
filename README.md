@@ -66,7 +66,7 @@ Download videos and images directly to your Stash library with automatic metadat
 
 ### Quick Start
 
-1. Navigate to `http://your-stash-url/plugin/stash-downloader`
+1. Navigate to `http://your-stash-url/downloader`
 2. Paste a URL and click "Add to Queue"
 3. Click "Edit" to review metadata
 4. Click "Save & Import to Stash"
@@ -112,7 +112,7 @@ Configure in Stash at **Settings** → **Plugins** → **Stash Downloader**:
 
 ### Quick Start
 
-1. Navigate to `http://your-stash-url/plugin/stash-browser`
+1. Navigate to `http://your-stash-url/browser`
 2. Select a source (Rule34, Gelbooru, or Danbooru)
 3. Type tags and press Enter to search
 4. Click "+" to add posts to your Stash Downloader queue

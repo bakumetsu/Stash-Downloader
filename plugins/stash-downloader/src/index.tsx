@@ -58,6 +58,19 @@ function PluginWrapper(props: any) {
 }
 
 /**
+ * Redirects the legacy /plugin/... route to ROUTES.MAIN, keeping the query string
+ * (the browser extension may pass ?url=...). Only reachable via in-app navigation,
+ * since the Stash server 404s a full page load of /plugin/{id}.
+ */
+function LegacyRouteRedirect() {
+  React.useEffect(() => {
+    window.history.replaceState({}, '', `${ROUTES.MAIN}${window.location.search}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, []);
+  return null;
+}
+
+/**
  * Add navigation button using MutationObserver (community plugin pattern)
  * This watches for the navbar-buttons to appear and injects our button via DOM
  * Reference: https://github.com/Serechops/Serechops-Stash/blob/main/plugins/stashUIPluginExample
@@ -146,23 +159,15 @@ function initializePlugin() {
       return React.createElement(PluginWrapper, props);
     });
 
+    window.PluginApi.register.route(ROUTES.LEGACY_MAIN, () => {
+      return React.createElement(LegacyRouteRedirect);
+    });
+
     log.info(`✓ Plugin registered successfully at ${ROUTES.MAIN}`);
 
     // Add navigation button using MutationObserver (community plugin pattern)
     // Uses .navbar-buttons selector like other community plugins
     addNavButtonViaMutationObserver();
-
-    // Handle direct URL navigation (bookmark/link to plugin route)
-    // When user navigates directly to /plugin/stash-downloader-dev, the route
-    // isn't registered yet when React Router first evaluates. Re-trigger navigation
-    // now that the route is registered.
-    if (window.location.pathname === ROUTES.MAIN) {
-      log.debug('Direct URL navigation detected, re-triggering route...');
-      // Small delay to ensure route registration is complete
-      setTimeout(() => {
-        window.dispatchEvent(new PopStateEvent('popstate'));
-      }, 50);
-    }
 
   } catch (error) {
     log.error(`Failed to initialize: ${String(error)}`);

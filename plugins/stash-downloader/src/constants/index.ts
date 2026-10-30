@@ -6,11 +6,15 @@ export const PLUGIN_ID = 'stash-downloader';
 export const PLUGIN_NAME = 'Stash Downloader';
 // Version is injected at build time via __APP_VERSION__ (from package.json)
 
+// Route base derived from PLUGIN_ID so dev builds (renamed by CI) get /downloader-dev.
+// Must NOT live under /plugin/: Stash's server owns /plugin/{id}/* for plugin assets,
+// so a page reload on /plugin/stash-downloader returns the server's plain 404.
+const ROUTE_BASE = `/${PLUGIN_ID.replace(/^stash-/, '')}`;
+
 export const ROUTES = {
-  MAIN: '/plugin/stash-downloader',
-  QUEUE: '/plugin/stash-downloader/queue',
-  METADATA: '/plugin/stash-downloader/metadata',
-  SETTINGS: '/plugin/stash-downloader/settings',
+  MAIN: ROUTE_BASE,
+  // Old route, kept as an in-app redirect for the AMO extension and old bookmarks
+  LEGACY_MAIN: `/plugin/${PLUGIN_ID}`,
 } as const;
 
 export const DEFAULT_SETTINGS = {

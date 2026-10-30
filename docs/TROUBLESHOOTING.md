@@ -16,7 +16,7 @@
 2. Check browser console (F12) for JavaScript errors
 3. Try hard refresh (Ctrl+Shift+R / Cmd+Shift+R)
 4. Verify `dist/stash-downloader.js` exists
-5. Try direct URL: `/plugin/stash-downloader`
+5. Try direct URL: `/downloader`
 
 ### Metadata not auto-filling
 

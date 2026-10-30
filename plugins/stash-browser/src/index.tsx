@@ -44,6 +44,23 @@ window.PluginApi.register.route(ROUTES.MAIN, (props?: any) => {
   return React.createElement(BrowserMain, props);
 });
 
+/**
+ * Redirects the legacy /plugin/... route to ROUTES.MAIN. Only reachable via in-app
+ * navigation, since the Stash server 404s a full page load of /plugin/{id}.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- plugin entry, no HMR
+function LegacyRouteRedirect() {
+  React.useEffect(() => {
+    window.history.replaceState({}, '', `${ROUTES.MAIN}${window.location.search}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, []);
+  return null;
+}
+
+window.PluginApi.register.route(ROUTES.LEGACY_MAIN, () => {
+  return React.createElement(LegacyRouteRedirect);
+});
+
 console.log(`[${PLUGIN_ID}] Route registered: ${ROUTES.MAIN}`);
 
 // =============================================================================

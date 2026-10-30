@@ -6,9 +6,15 @@ export const PLUGIN_ID = 'stash-browser';
 export const PLUGIN_NAME = 'Stash Browser';
 
 // Routes
+// Route base derived from PLUGIN_ID so dev builds (renamed by CI) get /browser-dev.
+// Must NOT live under /plugin/: Stash's server owns /plugin/{id}/* for plugin assets,
+// so a page reload on /plugin/stash-browser returns the server's plain 404.
+const ROUTE_BASE = `/${PLUGIN_ID.replace(/^stash-/, '')}`;
+
 export const ROUTES = {
-  MAIN: '/plugin/stash-browser',
-  SEARCH: '/plugin/stash-browser/search',
+  MAIN: ROUTE_BASE,
+  // Old route, kept as an in-app redirect for old bookmarks
+  LEGACY_MAIN: `/plugin/${PLUGIN_ID}`,
 } as const;
 
 // Storage keys

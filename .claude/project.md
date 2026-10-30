@@ -134,6 +134,7 @@ The plugin must:
 - **Context errors**: Don't use hooks like `useThemeMode()` that require custom providers
 - **CSS conflicts**: Stash provides Bootstrap; don't bundle another copy
 - **CORS errors**: Use YtDlpScraper (server-side) instead of client-side fetch
+- **404 on page reload**: Never register routes under `/plugin/` - the Stash server handles `/plugin/{id}/*` (assets) and returns a plain-text 404. Use `/downloader`, `/browser`
 
 ## Finding CSS Selectors in Stash
 When adding UI elements via DOM injection:

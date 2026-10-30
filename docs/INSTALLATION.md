@@ -33,8 +33,8 @@ Click **"Install"** on the plugin(s) you want, then **"Reload Plugins"** if need
 
 ### 3. Access the Plugins
 
-- **Stash Downloader**: `/plugin/stash-downloader` or click **Downloader** in navbar
-- **Stash Browser**: `/plugin/stash-browser` or click **Browser** in navbar
+- **Stash Downloader**: `/downloader` or click **Downloader** in navbar
+- **Stash Browser**: `/browser` or click **Browser** in navbar
 
 ---
 
@@ -192,13 +192,13 @@ docker exec -it stash pip install -U yt-dlp --break-system-packages
 After installation:
 
 ### Stash Downloader
-1. Navigate to `/plugin/stash-downloader`
+1. Navigate to `/downloader`
 2. You should see the download queue interface
 3. Try adding a test URL to verify it's working
 4. Check browser console (F12) for any errors
 
 ### Stash Browser
-1. Navigate to `/plugin/stash-browser`
+1. Navigate to `/browser`
 2. You should see the search interface with source selector
 3. Try searching for a tag to verify API connection
 4. If autocomplete doesn't work, check API credentials in settings

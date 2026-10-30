@@ -8,7 +8,7 @@ This guide covers both Stash Downloader and Stash Browser plugins.
 
 ### Quick Start
 
-1. **Access the plugin**: Navigate to `/plugin/stash-downloader` or click **Downloader** in navbar
+1. **Access the plugin**: Navigate to `/downloader` or click **Downloader** in navbar
 2. **Add a URL**: Paste a video/image URL and click "Add to Queue"
 3. **Edit metadata**: Click "Edit" to review and customize metadata
 4. **Import**: Click "Save & Import to Stash" to download and add to your library
@@ -84,7 +84,7 @@ This guide covers both Stash Downloader and Stash Browser plugins.
 
 ### Quick Start
 
-1. **Access the plugin**: Navigate to `/plugin/stash-browser` or click **Browser** in navbar
+1. **Access the plugin**: Navigate to `/browser` or click **Browser** in navbar
 2. **Select source**: Choose Rule34, Gelbooru, or Danbooru
 3. **Search tags**: Type tags and press Enter to add them
 4. **Browse results**: View thumbnails in the grid

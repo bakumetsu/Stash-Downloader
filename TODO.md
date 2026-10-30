@@ -2,6 +2,14 @@
 
 ## Backlog
 
+### Fork fixes (bakumetsu fork)
+- [ ] Fix rule34video.com 403 Forbidden on download
+- [ ] Replace fork workaround for rule34.xxx 404 (`-f` removed) with format fallback that keeps quality selection
+- [ ] Restore scraped cover image without the "no-adapter" error (fork disabled it)
+- [ ] Re-evaluate scraper order (fork put StashScraper ahead of yt-dlp)
+- [ ] Point CI `PAGES_URL` / manifest `url` fields at this fork
+
+
 ### CI/CD
 - [ ] **Automated browser store uploads**: Auto-submit extension updates to Firefox Add-ons when `browser-extension/manifest.json` version changes
   - Extension is live on AMO: https://addons.mozilla.org/en-US/firefox/addon/stash-downloader-extension/
@@ -24,6 +32,9 @@
 - [ ] Add integration tests for download flow
 
 ## Completed
+- [x] Fix 404 on page reload: routes moved from `/plugin/{id}` (owned by Stash server) to `/downloader` and `/browser`; old paths redirect in-app
+- [x] Empty download path falls back to Stash library, then `/data/StashDownloader` (from RubyDevil fork)
+- [x] Stash Browser post detail modal click-through fix (from RubyDevil fork)
 - [x] Firefox extension published on [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/stash-downloader-extension/)
 - [x] Proper job cancellation via Stash jobQueue (cancels all queued + running jobs)
 - [x] Remove concurrency setting (Stash processes jobs sequentially anyway)
