@@ -1,8 +1,8 @@
 - id: stash-downloader
   name: Stash Downloader
-  version: 0.5.3-fork.482175c
-  date: 2026-10-30 20:43:50
+  version: 0.5.3-fork.9723cca
+  date: 2026-10-30 21:14:46
   path: stash-downloader.zip
-  sha256: 5aa7e39ce252e8d1fb1a01039b20e70be10a7a59cbe7fb502a21fafe3c26f453
+  sha256: 091f7606007a4b452c1e8dd3abce5be2581fd8b8390ae4b2e013a811553a446c
   description: "Download images/videos with metadata extraction"
   url: https://github.com/bakumetsu/Stash-Downloader
