@@ -35,7 +35,10 @@ export const QueuePage: React.FC = () => {
   const { settings, updateSettings } = useSettings();
   const stashService = getStashService();
   const isStashEnvironment = stashService.isStashEnvironment();
-  const [editingItem, setEditingItem] = useState<IDownloadItem | null>(null);
+  // Track the edited item by id so the modal always shows its live queue state
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const editingItem = editingItemId ? queue.items.find((i) => i.id === editingItemId) ?? null : null;
+  const setEditingItem = (item: IDownloadItem | null) => setEditingItemId(item?.id ?? null);
   const [viewingLogsForItem, setViewingLogsForItem] = useState<IDownloadItem | null>(null);
   const [urlFieldValue, setUrlFieldValue] = useState('');
   const [showYtDlpWarning, setShowYtDlpWarning] = useState(false);
@@ -392,24 +395,22 @@ export const QueuePage: React.FC = () => {
     );
   };
 
+  // Import runs in the background: move straight on to the next pending item
+  const handleImportStarted = (itemId: string) => {
+    const nextItem = queue.items.find(
+      (i) => i.status === DownloadStatus.Pending && i.id !== itemId
+    );
+    // No more pending items - close modal
+    setEditingItem(nextItem ?? null);
+  };
+
+  // Never touches the modal: it may finish long after the user moved on (or closed it)
   const handleCompleteImport = (itemId: string, stashId: string) => {
     queue.updateItem(itemId, {
       status: DownloadStatus.Complete,
       stashId,
       completedAt: new Date(),
     });
-
-    // Auto-advance to next pending item immediately (modal stays open)
-    const pendingItems = queue.items.filter(
-      (i) => i.status === DownloadStatus.Pending && i.id !== itemId
-    );
-    const nextItem = pendingItems[0];
-    if (nextItem) {
-      setEditingItem(nextItem);
-    } else {
-      // No more pending items - close modal
-      setEditingItem(null);
-    }
   };
 
   // Skip to next pending item
@@ -1050,6 +1051,7 @@ export const QueuePage: React.FC = () => {
         item={editingItem}
         open={!!editingItem}
         onClose={() => setEditingItem(null)}
+        onImportStarted={handleImportStarted}
         onComplete={handleCompleteImport}
         onUpdateItem={queue.updateItem}
         queuePosition={queuePosition?.position}

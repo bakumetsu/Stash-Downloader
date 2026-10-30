@@ -29,6 +29,8 @@ interface EditMetadataModalProps {
   item: IDownloadItem | null;
   open: boolean;
   onClose: () => void;
+  /** Called as soon as an import starts (it then runs in the background) */
+  onImportStarted?: (itemId: string) => void;
   onComplete: (itemId: string, stashId: string) => void;
   onUpdateItem?: (id: string, updates: Partial<IDownloadItem> | ((currentItem: IDownloadItem) => Partial<IDownloadItem>)) => void;
   onRemoveItem?: (id: string) => void;
@@ -42,6 +44,7 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
   item,
   open,
   onClose,
+  onImportStarted,
   onComplete,
   onUpdateItem,
   onRemoveItem,
@@ -51,12 +54,16 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
 }) => {
   const toast = useToast();
   const log = useLog();
-  const [error, setError] = useState<string | null>(null);
+  const [dismissedErrorFor, setDismissedErrorFor] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   // Get current state from item
   const isImporting = item?.status === DownloadStatus.Processing || item?.status === DownloadStatus.Downloading;
   const isComplete = item?.status === DownloadStatus.Complete;
+  // Imports run in the background, so show the item's own error when it's reopened
+  const error = item?.status === DownloadStatus.Failed && item.error && dismissedErrorFor !== item.id
+    ? item.error
+    : null;
   const downloadProgress = item?.progress || null;
   const importStatus = item?.status === DownloadStatus.Downloading ? 'Downloading file...' :
                        item?.status === DownloadStatus.Processing ? 'Processing...' : 'Preparing...';
@@ -76,13 +83,6 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
     return () => clearInterval(interval);
   }, [isImporting]);
 
-  // Reset error when modal closes
-  useEffect(() => {
-    if (!open) {
-      setError(null);
-    }
-  }, [open]);
-
   const handleSave = async (editedMetadata: IDownloadItem['editedMetadata'], postImportAction: PostImportAction) => {
     if (!item || !onUpdateItem) return;
 
@@ -93,7 +93,10 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
       status: DownloadStatus.Processing,
     });
 
-    setError(null);
+    setDismissedErrorFor(null);
+
+    // Move on to the next item right away; this import continues in the background
+    onImportStarted?.(item.id);
 
     const itemTitle = editedMetadata?.title || item.metadata?.title || item.url;
 
@@ -122,8 +125,6 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
         status: DownloadStatus.Processing,
       });
 
-      // Modal stays open to show progress - will auto-advance on complete
-
       // Import to Stash with shared callback factory
       const callbacks = createImportCallbacks({
         itemId: item.id,
@@ -144,7 +145,6 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
       debugLog.error('Import error:', formattedError);
       log.addLog('error', 'download', `Failed to import: ${formattedError}`, errorStack || '');
       toast.showToast('error', 'Import Failed', formattedError);
-      setError(formattedError);
 
       if (onUpdateItem) {
         const errorLog = {
@@ -170,7 +170,6 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
   };
 
   const handleCancel = () => {
-    setError(null);
     onClose();
   };
 
@@ -259,8 +258,8 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
                   {error && (
                     <ErrorMessage
                       error={error}
-                      onRetry={() => setError(null)}
-                      onDismiss={() => setError(null)}
+                      onRetry={() => setDismissedErrorFor(item.id)}
+                      onDismiss={() => setDismissedErrorFor(item.id)}
                     />
                   )}
 
