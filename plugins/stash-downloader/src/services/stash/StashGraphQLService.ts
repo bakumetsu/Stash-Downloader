@@ -29,6 +29,11 @@ import { createLogger } from '@/utils';
 
 const log = createLogger('StashGraphQL');
 
+// Default per-request timeout (ms) so a hung fetch can't freeze polling loops
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+// Consecutive findJob request failures tolerated before a wait loop gives up
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
+
 // GraphQL response type
 interface GQLResponse<T = unknown> {
   data?: T;
@@ -67,21 +72,38 @@ export class StashGraphQLService {
    */
   private async gqlRequest<T = unknown>(
     query: string,
-    variables?: Record<string, unknown>
+    variables?: Record<string, unknown>,
+    options?: { timeoutMs?: number }
   ): Promise<GQLResponse<T>> {
-    const response = await fetch(this.endpoint, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({ query, variables }),
-    });
+    // Abort hung requests so polling loops can't freeze (0 disables the timeout)
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      log.error('HTTP error response:', errorText);
-      throw new Error(`GraphQL request failed: ${response.status} ${response.statusText}`);
+    let result: GQLResponse<T>;
+    try {
+      const response = await fetch(this.endpoint, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ query, variables }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        log.error('HTTP error response:', errorText);
+        throw new Error(`GraphQL request failed: ${response.status} ${response.statusText}`);
+      }
+
+      result = await response.json();
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(`GraphQL request timed out after ${timeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-
-    const result = await response.json();
 
     // Check for GraphQL errors and log detailed information
     if (result.errors && result.errors.length > 0) {
@@ -710,6 +732,42 @@ export class StashGraphQLService {
   }
 
   /**
+   * Run a plugin operation and surface the Python error message.
+   * Python `result_error` becomes the GraphQL error, which runPluginOperation() discards.
+   * - `error`: the plugin reported an error (message from GraphQL errors[0])
+   * - `transportError`: the request itself failed (network, proxy cut, timeout)
+   */
+  async runPluginOperationWithError(
+    pluginId: string,
+    args?: Record<string, unknown>,
+    options?: { timeoutMs?: number }
+  ): Promise<{ data: IPluginTaskResult | null; error?: string; transportError?: boolean }> {
+    const mutation = `
+      mutation RunPluginOperation($plugin_id: ID!, $args: Map) {
+        runPluginOperation(plugin_id: $plugin_id, args: $args)
+      }
+    `;
+
+    try {
+      // Default to no request timeout: extraction can legitimately take a while
+      const result = await this.gqlRequest<{ runPluginOperation: IPluginTaskResult }>(
+        mutation,
+        { plugin_id: pluginId, args: args || {} },
+        { timeoutMs: options?.timeoutMs ?? 0 }
+      );
+      const data = result.data?.runPluginOperation || null;
+      const firstError = result.errors?.[0];
+      if (firstError) {
+        return { data, error: firstError.message || 'Plugin operation failed' };
+      }
+      return { data };
+    } catch (error) {
+      log.warn(`runPluginOperationWithError transport failure: ${String(error)}`);
+      return { data: null, transportError: true };
+    }
+  }
+
+  /**
    * Stop a running job
    */
   async stopJob(jobId: string): Promise<boolean> {
@@ -870,7 +928,8 @@ export class StashGraphQLService {
   }
 
   /**
-   * Find a job by ID to check its status
+   * Find a job by ID to check its status.
+   * Returns null when the job genuinely doesn't exist, undefined when the request failed.
    */
   async findJob(jobId: string): Promise<{
     id: string;
@@ -878,7 +937,7 @@ export class StashGraphQLService {
     progress?: number;
     error?: string;
     description: string;
-  } | null> {
+  } | null | undefined> {
     const query = `
       query FindJob($input: FindJobInput!) {
         findJob(input: $input) {
@@ -897,7 +956,7 @@ export class StashGraphQLService {
       return result.data?.findJob || null;
     } catch (error) {
       log.error(`findJob failed: ${String(error)}`);
-      return null;
+      return undefined;
     }
   }
 
@@ -929,6 +988,12 @@ export class StashGraphQLService {
   /**
    * Poll for job completion and return result
    * Uses runPluginTask and polls findJob until complete
+   *
+   * Two timeout modes:
+   * - Default: wall-clock `maxWaitMs` since the task started (legacy behaviour).
+   * - Stall mode (`stallTimeoutMs` set): the job is stopped only if there has been no
+   *   activity for `stallTimeoutMs` while RUNNING, or it has been RUNNING longer than the
+   *   `maxWaitMs` safety ceiling. Time spent READY (queued behind other jobs) never counts.
    */
   async runPluginTaskAndWait(
     pluginId: string,
@@ -940,10 +1005,16 @@ export class StashGraphQLService {
       onProgress?: (progress: number) => void;
       /** Called immediately when job starts, with the jobId for potential cancellation */
       onJobStart?: (jobId: string) => void;
+      /** Stop the job if no activity was observed for this long while RUNNING (enables stall mode) */
+      stallTimeoutMs?: number;
+      /** Epoch ms of the last observed progress (used with stallTimeoutMs) */
+      getLastActivityAt?: () => number;
     }
   ): Promise<{ success: boolean; error?: string; jobId?: string }> {
     const pollInterval = options?.pollIntervalMs || 500;
-    const maxWait = options?.maxWaitMs || 120000; // 2 minutes default
+    const stallTimeout = options?.stallTimeoutMs ?? 0;
+    const stallMode = stallTimeout > 0;
+    const maxWait = options?.maxWaitMs || (stallMode ? 6 * 60 * 60 * 1000 : 120000);
 
     log.debug(`Starting plugin task: ${pluginId}/${taskName}`);
 
@@ -962,43 +1033,80 @@ export class StashGraphQLService {
 
     // Poll for completion
     const startTime = Date.now();
-    while (Date.now() - startTime < maxWait) {
+    let runningSince: number | null = null;
+    let consecutiveFailures = 0;
+
+    while (stallMode || Date.now() - startTime < maxWait) {
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
 
       const job = await this.findJob(jobId);
-      if (!job) {
-        log.warn(`Job ${jobId} not found, may have completed quickly`);
-        return { success: true, jobId };
-      }
 
-      log.debug(`Job ${jobId} status: ${job.status}, progress: ${job.progress || 0}`);
+      if (job === undefined) {
+        // Request failed (not "job not found") - tolerate blips, never stop the job over them
+        consecutiveFailures++;
+        log.warn(`Job ${jobId} status request failed (${consecutiveFailures}/${MAX_CONSECUTIVE_POLL_FAILURES})`);
+        if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          return { success: false, error: 'Lost connection to Stash while waiting for job', jobId };
+        }
+      } else {
+        consecutiveFailures = 0;
 
-      if (options?.onProgress && job.progress !== undefined) {
-        options.onProgress(job.progress);
-      }
-
-      switch (job.status) {
-        case 'FINISHED':
-          log.debug(`Stash job ${jobId} finished successfully`);
+        if (!job) {
+          log.warn(`Job ${jobId} not found, may have completed quickly`);
           return { success: true, jobId };
+        }
 
-        case 'FAILED':
-          log.error(`Stash job failed`, `Job ID: ${jobId}\nError: ${job.error || 'Unknown error'}`);
-          return { success: false, error: job.error || 'Job failed', jobId };
+        log.debug(`Job ${jobId} status: ${job.status}, progress: ${job.progress || 0}`);
 
-        case 'CANCELLED':
-        case 'STOPPING':
-          log.warn(`Stash job was cancelled`, `Job ID: ${jobId}`);
-          return { success: false, error: 'Job was cancelled', jobId };
+        if (options?.onProgress && job.progress !== undefined) {
+          options.onProgress(job.progress);
+        }
 
-        case 'READY':
-        case 'RUNNING':
-          // Continue polling
-          break;
+        switch (job.status) {
+          case 'FINISHED':
+            log.debug(`Stash job ${jobId} finished successfully`);
+            return { success: true, jobId };
+
+          case 'FAILED':
+            log.error(`Stash job failed`, `Job ID: ${jobId}\nError: ${job.error || 'Unknown error'}`);
+            return { success: false, error: job.error || 'Job failed', jobId };
+
+          case 'CANCELLED':
+          case 'STOPPING':
+            log.warn(`Stash job was cancelled`, `Job ID: ${jobId}`);
+            return { success: false, error: 'Job was cancelled', jobId };
+
+          case 'READY':
+            // Queued behind other Stash jobs - doesn't count toward stall/ceiling limits
+            break;
+
+          case 'RUNNING':
+            if (runningSince === null) {
+              runningSince = Date.now();
+            }
+            break;
+        }
+      }
+
+      if (stallMode && runningSince !== null) {
+        const now = Date.now();
+        const lastActivity = Math.max(options?.getLastActivityAt?.() ?? 0, runningSince);
+        const idleMs = now - lastActivity;
+        const idleSec = Math.round(idleMs / 1000);
+        if (idleMs > stallTimeout) {
+          log.warn(`Job ${jobId} stalled: no activity for ${idleSec}s (stall limit ${Math.round(stallTimeout / 1000)}s), stopping`);
+          await this.stopJob(jobId);
+          return { success: false, error: `Job stalled (no progress for ${idleSec}s)`, jobId };
+        }
+        if (now - runningSince > maxWait) {
+          log.warn(`Job ${jobId} exceeded max running time of ${Math.round(maxWait / 1000)}s (${idleSec}s since last activity), stopping`);
+          await this.stopJob(jobId);
+          return { success: false, error: 'Job exceeded maximum running time', jobId };
+        }
       }
     }
 
-    // Timeout - try to stop the job
+    // Timeout (wall-clock mode) - try to stop the job
     log.warn(`Job ${jobId} timed out after ${maxWait}ms`);
     await this.stopJob(jobId);
     return { success: false, error: 'Job timed out', jobId };
@@ -1123,10 +1231,20 @@ export class StashGraphQLService {
     log.debug(`Waiting for job: ${jobId}`);
 
     const startTime = Date.now();
+    let consecutiveFailures = 0;
     while (Date.now() - startTime < maxWait) {
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
 
       const job = await this.findJob(jobId);
+      if (job === undefined) {
+        // Request failed - tolerate blips, then give up without touching the job
+        consecutiveFailures++;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          return { success: false, error: 'Lost connection to Stash while waiting for job' };
+        }
+        continue;
+      }
+      consecutiveFailures = 0;
       if (!job) {
         // Job not found - may have completed very quickly
         log.debug(`Job ${jobId} not found, assuming completed`);

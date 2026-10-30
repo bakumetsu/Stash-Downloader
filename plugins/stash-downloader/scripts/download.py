@@ -70,8 +70,19 @@ def save_result(result_id: str, data: dict) -> bool:
     try:
         ensure_result_dir()
         result_path = get_result_path(result_id)
-        with open(result_path, "w") as f:
-            json.dump(data, f)
+        # Write to a temp file in the same dir, then atomically replace, so concurrent
+        # readers (progress polling) never see a half-written JSON file
+        tmp_path = f"{result_path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp_path, result_path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
         log.debug(f"Saved result to: {result_path}")
         return True
     except Exception as e:
@@ -233,17 +244,15 @@ def get_ytdlp_cmd(custom_path: Optional[str] = None) -> list:
         return _ytdlp_cmd
 
     # Strategy 1: Python module (most reliable - uses same Python that runs this script)
+    # find_spec avoids spawning `python -m yt_dlp --version` (~0.25s) on every invocation.
+    # Each Stash call is a new process, so the in-memory cache below never helps across calls.
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "yt_dlp", "--version"],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            version = result.stdout.strip()
-            log.info(f"Found yt-dlp as Python module (v{version}) via {sys.executable}")
+        import importlib.util
+        if importlib.util.find_spec("yt_dlp") is not None:
+            log.debug(f"Found yt-dlp as Python module via {sys.executable}")
             _ytdlp_cmd = [sys.executable, "-m", "yt_dlp"]
             return _ytdlp_cmd
-    except (subprocess.TimeoutExpired, Exception) as e:
+    except Exception as e:
         log.debug(f"Python module check failed: {e}")
 
     # Strategy 2: CLI binary on PATH (fallback)
@@ -406,6 +415,15 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
     Returns:
         dict with metadata on success, or dict with 'extraction_error' key on failure
     """
+    # rule34video: yt-dlp's extractor is broken (see extract_rule34video), so use the
+    # built-in page parser first and only fall back to yt-dlp if it returns nothing
+    if is_rule34video_url(url):
+        log.info("rule34video URL, using built-in page parser first")
+        parsed_info = extract_rule34video(url, proxy=proxy)
+        if parsed_info:
+            return parsed_info
+        log.warning("Built-in rule34video parser returned nothing, trying yt-dlp")
+
     cmd = get_ytdlp_cmd(ytdlp_path) + [
         "--dump-json",
         "--no-download",
@@ -436,7 +454,7 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
             # Clean up yt-dlp error message for display
             clean_error = error_msg.strip().split('\n')[-1] if error_msg else "Unknown error"
             if is_rule34video_url(url):
-                log.warning(f"yt-dlp failed on rule34video, using built-in page parser: {clean_error[:150]}")
+                log.warning(f"yt-dlp failed on rule34video, retrying built-in page parser: {clean_error[:150]}")
                 fallback = extract_rule34video(url, proxy=proxy)
                 if fallback:
                     return fallback
@@ -657,6 +675,10 @@ def select_format_url(info: Optional[dict], quality: str = "best") -> Optional[s
     return (fitting[-1] if fitting else formats[0]).get("url")
 
 
+# Max Range-resume attempts after a mid-stream failure in download_direct_file
+MAX_RESUME_RETRIES = 3
+
+
 def download_direct_file(
     url: str, output_dir: str, filename: Optional[str] = None, proxy: Optional[str] = None,
     progress_id: Optional[str] = None
@@ -735,57 +757,129 @@ def download_direct_file(
 
         log.debug(f"Using Referer: {referer}")
 
-        response = requests.get(
-            url,
-            headers=headers,
-            proxies=proxies,
-            stream=True,
-            timeout=300,  # 5 minute timeout
-            allow_redirects=True,
+        # Mid-stream failures that are worth resuming with a Range request
+        import urllib3
+        resumable_errors = (
+            requests.exceptions.ReadTimeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+            urllib3.exceptions.ProtocolError,
+            urllib3.exceptions.ReadTimeoutError,
         )
-        response.raise_for_status()
 
-        # Get content length for progress
-        total_size = int(response.headers.get("content-length", 0))
+        total_size = 0
         downloaded = 0
-        last_progress_update = 0
+        last_progress_update = 0.0
         progress_update_interval = 0.5  # Update every 0.5 seconds
+        resume_attempts = 0
+        wrote_file = False
 
-        # Create initial progress file
-        if progress_id:
-            log.info(f"Creating progress file for direct download: progress-{progress_id}")
+        def write_progress(status: str, force: bool = False) -> None:
+            """Write progress (throttled). downloaded_bytes is always written, even without Content-Length."""
+            nonlocal last_progress_update
+            if not progress_id:
+                return
+            now = time.time()
+            if not force and (now - last_progress_update) < progress_update_interval:
+                return
             save_result(f"progress-{progress_id}", {
-                "status": "starting",
-                "percentage": 0,
-                "downloaded_bytes": 0,
+                "status": status,
+                "percentage": (downloaded / total_size) * 100 if total_size > 0 else 0,
+                "downloaded_bytes": downloaded,
                 "total_bytes": total_size,
-                "last_updated": time.time(),
+                "last_updated": now,
             })
+            last_progress_update = now
 
-        with open(output_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
+        def discard_partial() -> None:
+            if wrote_file and os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                    log.debug(f"Deleted partial file: {output_path}")
+                except OSError as rm_err:
+                    log.warning(f"Could not delete partial file {output_path}: {rm_err}")
 
-                    # Update progress file periodically
-                    current_time = time.time()
-                    if progress_id and total_size > 0 and (current_time - last_progress_update) >= progress_update_interval:
-                        pct = (downloaded / total_size) * 100
-                        save_result(f"progress-{progress_id}", {
-                            "status": "downloading",
-                            "percentage": pct,
-                            "downloaded_bytes": downloaded,
-                            "total_bytes": total_size,
-                            "last_updated": current_time,
-                        })
-                        last_progress_update = current_time
-                        log.info(f"Direct download progress: {pct:.1f}% ({downloaded}/{total_size} bytes)")
-                    elif total_size > 0 and downloaded % (1024 * 1024) < 8192:  # Log every ~1MB
-                        log.debug(f"Download progress: {(downloaded / total_size) * 100:.1f}% ({downloaded}/{total_size} bytes)")
+        try:
+            while True:
+                req_headers = dict(headers)
+                resuming = downloaded > 0
+                if resuming:
+                    req_headers["Range"] = f"bytes={downloaded}-"
+                    # Byte offsets must refer to the raw stream, not a compressed one
+                    req_headers["Accept-Encoding"] = "identity"
 
-        log.debug(f"Direct download complete: {output_path} ({downloaded} bytes)")
-        return output_path
+                response = None
+                try:
+                    response = requests.get(
+                        url,
+                        headers=req_headers,
+                        proxies=proxies,
+                        stream=True,
+                        timeout=(15, 60),  # (connect, per-read): a stalled stream fails fast and is resumed
+                        allow_redirects=True,
+                    )
+
+                    if resuming and response.status_code in (403, 404, 410):
+                        # e.g. expired access token - retrying the same URL won't help
+                        log.error(f"Resume rejected with HTTP {response.status_code}, giving up")
+                        discard_partial()
+                        return None
+                    if resuming and response.status_code == 416 and total_size > 0 and downloaded >= total_size:
+                        break  # Already have everything
+                    response.raise_for_status()
+
+                    if resuming and response.status_code == 206:
+                        file_mode = "ab"
+                    else:
+                        if resuming:
+                            log.warning("Server ignored Range request (HTTP 200), restarting from 0")
+                        file_mode = "wb"
+                        downloaded = 0
+                        total_size = int(response.headers.get("content-length", 0))
+                        if not resuming:
+                            log.debug(f"Creating progress file for direct download: progress-{progress_id}")
+                            write_progress("starting", force=True)
+
+                    wrote_file = True
+                    with open(output_path, file_mode) as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                write_progress("downloading")
+
+                    # A clean close short of Content-Length is a truncated transfer
+                    if total_size > 0 and downloaded < total_size:
+                        raise requests.exceptions.ChunkedEncodingError(
+                            f"Connection closed early ({downloaded}/{total_size} bytes)"
+                        )
+                    break
+                except resumable_errors as e:
+                    if downloaded == 0:
+                        raise  # Nothing to resume from - treat as a normal failure
+                    resume_attempts += 1
+                    if resume_attempts > MAX_RESUME_RETRIES:
+                        log.error(f"Direct download failed after {MAX_RESUME_RETRIES} resume attempts: {e}")
+                        discard_partial()
+                        return None
+                    # Trust the file on disk for the resume offset
+                    downloaded = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                    log.warning(
+                        f"Download interrupted at {downloaded} bytes ({e}); "
+                        f"resuming (attempt {resume_attempts}/{MAX_RESUME_RETRIES})"
+                    )
+                    time.sleep(min(2 * resume_attempts, 5))
+                finally:
+                    if response is not None:
+                        response.close()
+
+            write_progress("downloading", force=True)
+            log.debug(f"Direct download complete: {output_path} ({downloaded} bytes)")
+            return output_path
+        except BaseException:
+            # Never leave a partial file behind on failure
+            discard_partial()
+            raise
 
     except requests.exceptions.RequestException as e:
         log.error(f"Direct download failed (network error): {e}")
@@ -848,6 +942,12 @@ def parse_ytdlp_progress(line: str) -> Optional[dict]:
             result["eta"] = minutes * 60 + seconds
 
         return result
+
+    # Percentage without a known size (e.g. "12.3% of N/A" for HLS/DASH): still report
+    # the percentage so frontend stall detection sees the download advancing
+    pct_match = re.search(r"\[download\]\s+(\d+\.?\d*)%", line)
+    if pct_match:
+        return {"percentage": float(pct_match.group(1)), "downloaded_bytes": 0, "total_bytes": 0}
 
     return None
 
@@ -1014,7 +1114,7 @@ def download_video(
                             progress["last_updated"] = current_time
                             save_result(f"progress-{progress_id}", progress)
                             last_progress_update = current_time
-                            log.info(f"Progress: {progress['percentage']:.1f}% ({progress.get('downloaded_bytes', 0)}/{progress.get('total_bytes', 0)} bytes)")
+                            log.debug(f"Progress: {progress['percentage']:.1f}% ({progress.get('downloaded_bytes', 0)}/{progress.get('total_bytes', 0)} bytes)")
 
                         if progress_callback:
                             progress_callback(progress)

@@ -123,10 +123,15 @@ export class DownloadService {
         has_ytdlp_path: !!ytdlpPath,
       }));
 
-      // Start progress polling in background
+      // Start progress polling in background. Always runs (even without onProgress)
+      // because it also feeds stall detection via lastActivityAt.
       let progressPollInterval: ReturnType<typeof setInterval> | null = null;
       let pollCount = 0;
-      if (options.onProgress) {
+      let lastActivityAt = Date.now();
+      let lastBytes = 0;
+      let lastPercentage = 0;
+      let taskResult: Awaited<ReturnType<typeof stashService.runPluginTaskAndWait>>;
+      try {
         log.debug(`Starting progress polling with progressId: ${progressId}`);
         progressPollInterval = setInterval(async () => {
           pollCount++;
@@ -144,6 +149,14 @@ export class DownloadService {
             // Check if we got progress data (retrieved=true means file was found)
             if (progressResult?.retrieved) {
               const status = progressResult.status;
+              // Any growth in bytes/percentage counts as activity (failed polls never do)
+              const bytes = progressResult.downloaded_bytes || 0;
+              const pct = progressResult.percentage || 0;
+              if (bytes > lastBytes || pct > lastPercentage) {
+                lastActivityAt = Date.now();
+              }
+              lastBytes = bytes;
+              lastPercentage = pct;
               // Update progress for downloading or starting status
               if (status === 'downloading' || status === 'starting') {
                 const progress: IDownloadProgressWithActivity = {
@@ -157,7 +170,7 @@ export class DownloadService {
                   statusMessage: progressResult.message,
                 };
                 log.debug(`Progress update: ${progress.percentage.toFixed(1)}% - ${progress.bytesDownloaded}/${progress.totalBytes} bytes (activity: ${progress.lastActivityAt?.toISOString()})`);
-                options.onProgress!(progress);
+                options.onProgress?.(progress);
               }
             }
             // not_found is expected early in download - silently ignore
@@ -168,41 +181,46 @@ export class DownloadService {
             }
           }
         }, 1000); // Poll every second
-      }
 
-      const taskResult = await stashService.runPluginTaskAndWait(
-        PLUGIN_ID,
-        'Download Video',
-        {
-          mode: 'download',
-          url: url,
-          fallback_url: options.fallbackUrl, // Original page URL for yt-dlp fallback
-          output_dir: serverDownloadPath,
-          filename: options.filename,
-          quality: options.quality || 'best',
-          result_id: resultId,
-          progress_id: progressId, // For real-time progress updates
-          proxy: httpProxy,
-          ytdlp_path: ytdlpPath, // Custom yt-dlp binary path
-        },
-        {
-          maxWaitMs: 600000, // 10 minutes for large downloads
-          onProgress: (_stashJobProgress) => {
-            // This is Stash job progress (usually stays at 0), not download progress
-            // Real progress comes from progress polling above
+        taskResult = await stashService.runPluginTaskAndWait(
+          PLUGIN_ID,
+          'Download Video',
+          {
+            mode: 'download',
+            url: url,
+            fallback_url: options.fallbackUrl, // Original page URL for yt-dlp fallback
+            output_dir: serverDownloadPath,
+            filename: options.filename,
+            quality: options.quality || 'best',
+            result_id: resultId,
+            progress_id: progressId, // For real-time progress updates
+            proxy: httpProxy,
+            ytdlp_path: ytdlpPath, // Custom yt-dlp binary path
           },
-          onJobStart: (jobId) => {
-            log.debug(`Download job started with ID: ${jobId}`);
-            if (options.onJobStart) {
-              options.onJobStart(jobId);
-            }
-          },
+          {
+            // Stall-based: stop only if no progress for 5 minutes while running.
+            // maxWaitMs is just an absolute safety ceiling on RUNNING time.
+            stallTimeoutMs: 300000,
+            maxWaitMs: 6 * 60 * 60 * 1000,
+            getLastActivityAt: () => lastActivityAt,
+            onProgress: (_stashJobProgress) => {
+              // This is Stash job progress (usually stays at 0), not download progress
+              // Real progress comes from progress polling above
+            },
+            onJobStart: (jobId) => {
+              log.debug(`Download job started with ID: ${jobId}`);
+              if (options.onJobStart) {
+                options.onJobStart(jobId);
+              }
+            },
+          }
+        );
+
+      } finally {
+        // Stop progress polling
+        if (progressPollInterval) {
+          clearInterval(progressPollInterval);
         }
-      );
-
-      // Stop progress polling
-      if (progressPollInterval) {
-        clearInterval(progressPollInterval);
       }
 
       // Cleanup progress file
