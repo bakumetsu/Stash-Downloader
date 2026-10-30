@@ -3,7 +3,6 @@
 ## Backlog
 
 ### Fork fixes (bakumetsu fork)
-- [ ] Fix rule34video.com 403 Forbidden on download
 - [ ] Replace fork workaround for rule34.xxx 404 (`-f` removed) with format fallback that keeps quality selection
 - [ ] Restore scraped cover image without the "no-adapter" error (fork disabled it)
 - [ ] Re-evaluate scraper order (fork put StashScraper ahead of yt-dlp)
@@ -32,6 +31,8 @@
 - [ ] Add integration tests for download flow
 
 ## Completed
+- [x] rule34video.com: built-in page parser fallback when yt-dlp's extractor fails ("No video formats found"); re-fetches fresh tokenized URLs on download
+- [x] Copy button in Activity Log toolbar (copies filtered logs as plain text, works over plain HTTP)
 - [x] Fix 404 on page reload: routes moved from `/plugin/{id}` (owned by Stash server) to `/downloader` and `/browser`; old paths redirect in-app
 - [x] Empty download path falls back to Stash library, then `/data/StashDownloader` (from RubyDevil fork)
 - [x] Stash Browser post detail modal click-through fix (from RubyDevil fork)

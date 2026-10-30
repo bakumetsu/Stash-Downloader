@@ -435,6 +435,11 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
             error_msg = result.stderr or result.stdout or "Unknown error"
             # Clean up yt-dlp error message for display
             clean_error = error_msg.strip().split('\n')[-1] if error_msg else "Unknown error"
+            if is_rule34video_url(url):
+                log.warning(f"yt-dlp failed on rule34video, using built-in page parser: {clean_error[:150]}")
+                fallback = extract_rule34video(url, proxy=proxy)
+                if fallback:
+                    return fallback
             if proxy:
                 log.error(f"yt-dlp extraction FAILED (proxy {proxy}): {error_msg[:200]}")
             else:
@@ -503,6 +508,153 @@ def is_direct_file_url(url: str) -> bool:
         pass
 
     return False
+
+
+# =============================================================================
+# Site fallbacks (used when a yt-dlp extractor is broken)
+# =============================================================================
+
+BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+RULE34VIDEO_URL_RE = re.compile(r"^https?://(?:www\.)?rule34video\.(?:com|party)/videos?/(\d+)", re.IGNORECASE)
+
+QUALITY_MAX_HEIGHT = {"1080p": 1080, "720p": 720, "480p": 480}
+
+
+def is_rule34video_url(url: Optional[str]) -> bool:
+    return bool(url and RULE34VIDEO_URL_RE.match(url))
+
+
+def _parse_iso_duration(value: Optional[str]) -> Optional[int]:
+    """Parse ISO 8601 durations like PT0H2M01S into seconds."""
+    m = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value or "")
+    if not m or not any(m.groups()):
+        return None
+    hours, minutes, seconds = (int(g or 0) for g in m.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def extract_rule34video(url: str, proxy: Optional[str] = None) -> Optional[dict]:
+    """
+    Parse a rule34video.com page into a yt-dlp style info dict.
+
+    Fallback for yt-dlp's Rule34Video extractor, which (as of yt-dlp 2026.10.26)
+    fails with "No video formats found" since the site added a file-size <span>
+    inside its download links. The CDN returns 403 for non-browser User-Agents,
+    so a browser UA is required for both the page and the video URLs.
+
+    Returns None if the page can't be fetched or has no video URLs.
+    """
+    import html
+    import requests
+
+    m = RULE34VIDEO_URL_RE.match(url)
+    if not m:
+        return None
+    video_id = m.group(1)
+
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    try:
+        response = requests.get(url, headers={"User-Agent": BROWSER_USER_AGENT}, proxies=proxies, timeout=30)
+        response.raise_for_status()
+    except Exception as e:
+        log.error(f"rule34video fallback: failed to fetch page: {e}")
+        return None
+    page = response.text
+
+    def clean(fragment: str) -> str:
+        return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", fragment))).strip()
+
+    # Formats keyed by height. Primary source: the Download menu links,
+    # e.g. <a href="...?v-acctoken=...&download=true&...">MP4 1080p<span>67 MB</span></a>
+    formats_by_height: dict = {}
+    for href, label in re.findall(r'<a[^>]+href="([^"]+download=true[^"]*)"[^>]*>(.*?)</a>', page, re.DOTALL):
+        label_text = clean(label)
+        height = re.search(r"\b(\d{3,4})p?\b", label_text)
+        if height:
+            ext = label_text.split(" ", 1)[0].lower() or "mp4"
+            formats_by_height[int(height.group(1))] = {"url": html.unescape(href), "ext": ext}
+
+    # Backup source: player flashvars (video_url / video_alt_urlN + matching _text)
+    for key, video_url in re.findall(r"\b(video_url|video_alt_url\d*):\s*'([^']+)'", page):
+        label = re.search(rf"\b{key}_text:\s*'(\d{{3,4}})p?", page)
+        # KVS sites sometimes obfuscate URLs as "function/0/..." - those need decoding, skip
+        if label and not video_url.startswith("function/"):
+            formats_by_height.setdefault(int(label.group(1)), {"url": video_url, "ext": "mp4"})
+
+    if not formats_by_height:
+        log.error("rule34video fallback: no video URLs found on page")
+        return None
+
+    formats = [
+        {"format_id": f"{h}p", "url": f["url"], "ext": f["ext"], "height": h}
+        for h, f in sorted(formats_by_height.items())
+    ]
+
+    # Title, description, thumbnail, date, duration from JSON-LD
+    ld: dict = {}
+    ld_match = re.search(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.DOTALL)
+    if ld_match:
+        try:
+            ld = json.loads(ld_match.group(1))
+        except json.JSONDecodeError:
+            log.debug("rule34video fallback: could not parse JSON-LD")
+
+    # Per-video chips: data-item-type is tag (characters + tags), category, or model (artist)
+    chips: dict = {"tag": [], "category": [], "model": []}
+    for item_type, label in re.findall(
+        rf'data-video-id="{video_id}" data-item-type="(tag|category|model)"[^>]*>.*?<a\b[^>]*>(.*?)</a>', page, re.DOTALL
+    ):
+        name = clean(label)
+        if name and name not in chips[item_type]:
+            chips[item_type].append(name)
+
+    uploader = uploader_url = None
+    uploader_match = re.search(r'Uploaded by</div>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', page, re.DOTALL)
+    if uploader_match:
+        uploader_url, uploader = uploader_match.group(1), clean(uploader_match.group(2)) or None
+
+    title = ld.get("name")
+    if not title:
+        title_match = re.search(r"video_title:\s*'([^']*)'", page) or re.search(r"<title>(.*?)</title>", page, re.DOTALL)
+        title = clean(title_match.group(1)) if title_match else f"rule34video {video_id}"
+
+    thumbnail = ld.get("thumbnailUrl")
+    if not thumbnail:
+        preview_match = re.search(r"preview_url:\s*'([^']+)'", page)
+        thumbnail = preview_match.group(1) if preview_match else None
+
+    best = formats[-1]
+    log.info(f"✓ rule34video fallback: {len(formats)} formats (best {best['height']}p), {len(chips['tag'])} tags")
+    return {
+        "id": video_id,
+        "extractor": "rule34video-fallback",
+        "title": html.unescape(title),
+        "description": html.unescape(ld.get("description") or "") or None,
+        "duration": _parse_iso_duration(ld.get("duration")),
+        "thumbnail": thumbnail,
+        "upload_date": (ld.get("uploadDate") or "").replace("-", "")[:8] or None,
+        "uploader": uploader,
+        "uploader_url": uploader_url,
+        "tags": chips["tag"],
+        "categories": chips["category"],
+        "creators": chips["model"],
+        "formats": formats,
+        "url": best["url"],
+        "height": best["height"],
+        "webpage_url": url,
+        "original_url": url,
+    }
+
+
+def select_format_url(info: Optional[dict], quality: str = "best") -> Optional[str]:
+    """Pick the highest format at or below the requested quality (or the lowest if none fit)."""
+    formats = sorted((info or {}).get("formats") or [], key=lambda f: f.get("height") or 0)
+    if not formats:
+        return None
+    max_height = QUALITY_MAX_HEIGHT.get(quality)
+    fitting = [f for f in formats if not max_height or (f.get("height") or 0) <= max_height]
+    return (fitting[-1] if fitting else formats[0]).get("url")
 
 
 def download_direct_file(
@@ -1021,6 +1173,20 @@ def task_download(args: dict) -> dict:
                 ytdlp_url = fallback_url
             else:
                 log.warning("[task_download] Direct download failed, no fallback URL - trying yt-dlp with direct URL")
+
+    # rule34video: video URLs carry short-lived access tokens and yt-dlp's extractor
+    # is broken, so re-parse the page for fresh URLs instead of relying on yt-dlp
+    if is_rule34video_url(ytdlp_url):
+        log.info("Fetching fresh rule34video URL from page")
+        fresh_url = select_format_url(extract_rule34video(ytdlp_url, proxy=proxy), quality)
+        if fresh_url:
+            file_path = download_direct_file(fresh_url, output_dir, filename, proxy=proxy, progress_id=progress_id)
+            if file_path:
+                result = {"file_path": file_path, "file_size": os.path.getsize(file_path), "success": True}
+                if result_id:
+                    save_result(result_id, result)
+                return result
+            log.warning("rule34video direct download failed, trying yt-dlp")
 
     # Check yt-dlp availability
     if not check_ytdlp(ytdlp_path):

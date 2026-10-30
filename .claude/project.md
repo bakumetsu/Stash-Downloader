@@ -187,6 +187,7 @@ docker exec -it stash pip install -U yt-dlp --break-system-packages
 
 ### Common Site-Specific Issues
 - **XHamster**: Extractor updates frequently needed (check [yt-dlp issues](https://github.com/yt-dlp/yt-dlp/issues))
+- **rule34video.com**: yt-dlp's extractor is broken (site markup changed). `download.py` falls back to `extract_rule34video()` (parses download links/flashvars, JSON-LD, tag chips). Video URLs carry short-lived `v-acctoken` tokens and the CDN 403s non-browser User-Agents, so downloads re-parse the page for fresh URLs and use a browser UA
 - **Sites behind geo-blocks**: Configure HTTP/SOCKS proxy in plugin settings
 - **Rate limiting**: Some sites block rapid requests; add delays between downloads
 
