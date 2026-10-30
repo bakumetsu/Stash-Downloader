@@ -3,11 +3,12 @@
 Package the built plugins as a Stash plugin source (index.yml + ZIPs).
 
 Mirrors the stable packaging in .github/workflows/publish.yml, but writes to a
-local folder so it can be committed to a branch and served from
-raw.githubusercontent.com for testing without GitHub Pages.
+local folder so it can be committed and served from raw.githubusercontent.com
+without GitHub Pages. The repo root on main is the published source:
+https://raw.githubusercontent.com/bakumetsu/Stash-Downloader/main/index.yml
 
 Usage (after `npm run build`):
-    python package_plugin_source.py <output_dir> [--repo-url URL]
+    python package_plugin_source.py . [--repo-url URL]
 """
 
 import argparse

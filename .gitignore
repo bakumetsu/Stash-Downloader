@@ -16,6 +16,10 @@ _package/
 index.yml
 _site/
 *.zip
+# Plugin source served from main via raw.githubusercontent.com (package_plugin_source.py)
+!/index.yml
+!/stash-downloader.zip
+!/stash-browser.zip
 
 # Plugin build output (inside each plugin)
 plugins/*/dist/

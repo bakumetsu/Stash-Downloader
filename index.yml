@@ -1,0 +1,16 @@
+- id: stash-downloader
+  name: Stash Downloader
+  version: 0.5.3-fork.19f3da7
+  date: 2026-10-30 20:19:46
+  path: stash-downloader.zip
+  sha256: 74ec8758fb383b5104d61e14d13868dc7e67a727471fc9a6f15809b619980ef4
+  description: "Download images/videos with metadata extraction"
+  url: https://github.com/bakumetsu/Stash-Downloader
+- id: stash-browser
+  name: Stash Browser
+  version: 0.2.1-fork.19f3da7
+  date: 2026-10-30 20:19:46
+  path: stash-browser.zip
+  sha256: 0f92de577a014816c8aeadf8426cf81e667972689bb84f27a7f9a017b29fbede
+  description: "Browse booru sites and add content to Stash Downloader queue"
+  url: https://github.com/bakumetsu/Stash-Downloader
