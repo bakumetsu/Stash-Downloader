@@ -23,7 +23,7 @@
 
 ### Quick Install
 
-> **Fork note:** The original project is no longer maintained. This fork maintains **Stash Downloader** only (Stash Browser and the Firefox extension are not maintained here). Uninstall the original Stash Downloader before installing from this source - both use the same plugin ID.
+> **Fork note:** The original project is no longer maintained. This fork maintains **Stash Downloader** only (Stash Browser and the Firefox extension are not maintained here). **Uninstall the original Stash Downloader first** - both use the same plugin ID, and Stash hides already-installed plugin IDs from the Available Plugins list, so this fork won't appear until the original is removed.
 
 1. In Stash: **Settings** → **Plugins** → **Available Plugins**
 2. Click **"Add Source"**

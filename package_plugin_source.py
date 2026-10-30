@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Package the built plugins as a Stash plugin source (index.yml + ZIPs).
+Package Stash Downloader as a Stash plugin source (index.yml + ZIP).
+Stash Browser is not maintained in this fork, so it is not published.
 
 Mirrors the stable packaging in .github/workflows/publish.yml, but writes to a
 local folder so it can be committed and served from raw.githubusercontent.com
@@ -27,12 +28,6 @@ PLUGINS = [
         "name": "Stash Downloader",
         "description": "Download images/videos with metadata extraction",
         "extra_files": ["README.md", "LICENSE"],
-    },
-    {
-        "id": "stash-browser",
-        "name": "Stash Browser",
-        "description": "Browse booru sites and add content to Stash Downloader queue",
-        "extra_files": ["LICENSE"],
     },
 ]
 
