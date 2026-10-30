@@ -971,8 +971,9 @@ def task_download(args: dict) -> dict:
     """
     url = args.get("url")
     fallback_url = args.get("fallback_url")  # Original page URL for yt-dlp fallback
-    # Default to /data/StashDownloader (configurable via plugin settings)
-    output_dir = args.get("output_dir", "/data/StashDownloader")
+    # Default to /data/StashDownloader (configurable via plugin settings).
+    # Use `or` so an empty string (no setting + no library path) also falls back.
+    output_dir = args.get("output_dir") or "/data/StashDownloader"
     filename = args.get("filename")
     quality = args.get("quality", "best")
     proxy = args.get("proxy")  # Optional proxy for bypassing restrictions

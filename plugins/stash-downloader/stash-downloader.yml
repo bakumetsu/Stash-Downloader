@@ -5,7 +5,7 @@ url: https://github.com/Codename-11/Stash-Downloader
 settings:
   serverDownloadPath:
     displayName: Download Path
-    description: "Absolute path for downloaded files (relative to Stash server/container). Overrides Stash library if set. Examples: /data/downloads, /mnt/media/videos. Default: /data/StashDownloader. Leave empty to use your Stash video library."
+    description: "Absolute path for downloaded files (relative to Stash server/container). Overrides Stash library if set. Examples: /data/downloads, /mnt/media/videos. Leave empty to use your Stash video library (falls back to /data/StashDownloader if none is configured)."
     type: STRING
   ytdlpPath:
     displayName: yt-dlp Path
