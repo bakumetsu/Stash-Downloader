@@ -23,10 +23,12 @@
 
 ### Quick Install
 
+> **Fork note:** The original project is no longer maintained. This fork maintains **Stash Downloader** only (Stash Browser and the Firefox extension are not maintained here). Uninstall the original Stash Downloader before installing from this source - both use the same plugin ID.
+
 1. In Stash: **Settings** → **Plugins** → **Available Plugins**
 2. Click **"Add Source"**
-3. Enter: `https://codename-11.github.io/Stash-Downloader/index.yml`
-4. Find your desired plugin and click **"Install"**
+3. Enter: `https://raw.githubusercontent.com/bakumetsu/Stash-Downloader/main/index.yml`
+4. Find **Stash Downloader** and click **"Install"**
 
 ---
 ## Product Page & Documentation
